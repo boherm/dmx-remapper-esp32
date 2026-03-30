@@ -1,12 +1,13 @@
 /*
  * DMX Remapper ESP32 — hybrid approach
  * --------------------------------------
- * TX : esp_dmx sur DMX_NUM_1 (UART1) — fiable, break correct
- * RX: HardwareSerial on UART2     — évite le bug DMX_NUM_2
+ * RX : esp_dmx on DMX_NUM_1 (UART1, GPIO16) — reliable break detection
+ * TX : IDF UART  on UART_NUM_2 (GPIO17)     — avoids dmx_driver_install
+ *                                              crash bug on DMX_NUM_2
  *
- * Required versions :
- *   - Core Arduino ESP32 : 2.0.17  (Espressif)
- *   - esp_dmx            : 4.1.0   (someweisguy)
+ * Required versions:
+ *   - Arduino ESP32 core : 2.0.17 (Espressif)
+ *   - esp_dmx            : 4.1.0  (someweisguy)
  *   - ArduinoJson        : 7.x
  *   - ESPAsyncWebServer  : 3.x (ESP32Async)
  *   - AsyncTCP           : 3.x (ESP32Async)
@@ -23,30 +24,17 @@
 #include "web_ui.h"
 
 // ─── Pins ────────────────────────────────────────────────────────────────────
-// TX sur UART1 (esp_dmx)
-#define DMX_TX_PIN      17
-#define DMX_TX_EN_PIN    5
-
-// RX sur UART2 (HardwareSerial natif)
-#define DMX_RX_PIN      16
-#define DMX_RX_EN_PIN    4
-
+#define DMX_RX_PIN      16   // esp_dmx RX  — MAX485 RO
+#define DMX_TX_PIN      17   // IDF UART TX — MAX485 DI
+#define DMX_RX_EN_PIN    4   // MAX485 RX enable (LOW = listen, managed by esp_dmx)
+#define DMX_TX_EN_PIN    5   // MAX485 TX enable (HIGH = emit, permanent)
 #define LED_RX_PIN       2
-#define LED_TX_PIN      15
 
-// ─── DMX TX — esp_dmx on DMX_NUM_1 ─────────────────────────────────────────
-static dmx_port_t txPort = DMX_NUM_1;
+// ─── DMX ports ───────────────────────────────────────────────────────────────
+static dmx_port_t rxPort = DMX_NUM_1;   // esp_dmx RX — UART1
+static dmx_port_t txPort = DMX_NUM_0;   // esp_dmx TX — UART0 (freed after Serial.end())
 
-// ─── DMX RX — HardwareSerial on UART2 ──────────────────────────────────────
-#define DMX_BAUD    250000
-#define DMX_SERIAL  SERIAL_8N2
-#define DMX_BUF_SZ  600
-
-static int      rxPos    = -1;
-static uint32_t lastRxUs = 0;
-static bool     newPacket = false;
-
-// ─── Buffers DMX ─────────────────────────────────────────────────────────────
+// ─── DMX buffers ─────────────────────────────────────────────────────────────
 uint8_t dmxIn[DMX_PACKET_SIZE]  = {0};
 uint8_t dmxOut[DMX_PACKET_SIZE] = {0};
 
@@ -56,15 +44,13 @@ static uint32_t      lastFrameAt = 0;
 static uint32_t      lastTxAt    = 0;
 static volatile bool forceTX     = false;
 
-// ─── LED ─────────────────────────────────────────────────────────────────────
-#define LED_TOGGLE_MS  150
+// ─── LED RX ──────────────────────────────────────────────────────────────────
+#define LED_TOGGLE_MS   80
 #define LED_TIMEOUT_MS 500
 static uint32_t lastToggleAt = 0;
 static bool     ledState     = false;
 
-// ─── LED TX ──────────────────────────────────────────────────────────────────
-#define LED_TX_FLASH_MS  30        // flash duration per sent frame
-static uint32_t ledTxOffAt = 0;
+// ─── WiFi ────────────────────────────────────────────────────────────────────
 const char* AP_SSID = "DMXR";
 const char* AP_PASS = "dmx12345";
 
@@ -85,52 +71,18 @@ std::vector<MappingEntry> mappings;
 std::vector<MappingEntry> pendingMappings;
 volatile bool mappingsPending = false;
 volatile bool saveNeeded      = false;
-volatile bool bypassMode      = false;
+volatile bool testMode        = false;  // when true, dmxOut is not overwritten by incoming DMX
 
 portMUX_TYPE dmxMux = portMUX_INITIALIZER_UNLOCKED;
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  DMX TX — via esp_dmx (UART1)
+//  DMX TX — esp_dmx on DMX_NUM_0 (UART0, remapped to GPIO17)
+//  UART0 is freed with Serial.end() in setup() before installing the driver.
 // ═════════════════════════════════════════════════════════════════════════════
 void sendDMX() {
-  digitalWrite(LED_TX_PIN, HIGH);
-  ledTxOffAt = millis() + LED_TX_FLASH_MS;
   dmx_write(txPort, dmxOut, DMX_PACKET_SIZE);
   dmx_send_num(txPort, DMX_PACKET_SIZE);
   dmx_wait_sent(txPort, DMX_TIMEOUT_TICK);
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-//  DMX RX — HardwareSerial state machine (UART2)
-//  Silence > 1000 µs = break → new frame
-// ═════════════════════════════════════════════════════════════════════════════
-void readDMX() {
-  uint32_t now = micros();
-
-  if (rxPos >= 0 && (now - lastRxUs) > 1000) {
-    if (rxPos > 1) {
-      newPacket   = true;
-      lastFrameAt = millis();
-    }
-    rxPos = -1;
-  }
-
-  while (Serial2.available()) {
-    uint8_t b = (uint8_t)Serial2.read();
-    lastRxUs  = micros();
-
-    if (rxPos == -1) {
-      if (b == 0x00) { rxPos = 0; dmxIn[0] = 0; }
-    } else {
-      rxPos++;
-      if (rxPos < DMX_PACKET_SIZE) dmxIn[rxPos] = b;
-      if (rxPos >= DMX_PACKET_SIZE - 1) {
-        newPacket   = true;
-        lastFrameAt = millis();
-        rxPos       = -1;
-      }
-    }
-  }
 }
 
 // ─── Remapping ───────────────────────────────────────────────────────────────
@@ -180,8 +132,8 @@ void loadMappings() {
   String json = prefs.getString("mappings", "");
   prefs.end();
   if (json.isEmpty()) {
-    mappings.push_back({ 1, 8, "Groupe A", {1, 9, 17, 25} });
-    mappings.push_back({ 50, 8, "Groupe B", {50, 58, 66} });
+    mappings.push_back({ 1, 8, "Group A", {1, 9, 17, 25} });
+    mappings.push_back({ 50, 8, "Group B", {50, 58, 66} });
     Serial.println("[NVS] Default values.");
     return;
   }
@@ -192,7 +144,7 @@ void loadMappings() {
     MappingEntry e;
     e.srcAddr  = obj["src"]      | 1;
     e.channels = obj["channels"] | 1;
-    e.label    = obj["label"]    | "Sans nom";
+    e.label    = obj["label"]    | "Unnamed";
     for (int d : obj["dests"].as<JsonArray>()) e.destAddrs.push_back(d);
     mappings.push_back(e);
   }
@@ -211,9 +163,7 @@ void setupRoutes() {
     portENTER_CRITICAL(&mappingsMux);
     json = serializeMappings();
     portEXIT_CRITICAL(&mappingsMux);
-    json.remove(json.length() - 1);
-    json += ",\"bypass\":";
-    json += bypassMode ? "true}" : "false}";
+    // Inject bypass state: {"mappings":[...]} → {"mappings":[...],"bypass":true}
     r->send(200, "application/json", json);
   });
 
@@ -227,7 +177,7 @@ void setupRoutes() {
           MappingEntry e;
           e.srcAddr  = obj["src"]      | 1;
           e.channels = obj["channels"] | 1;
-          e.label    = obj["label"]    | "Sans nom";
+          e.label    = obj["label"]    | "Unnamed";
           for (int d : obj["dests"].as<JsonArray>()) e.destAddrs.push_back(d);
           pendingMappings.push_back(e);
         }
@@ -237,12 +187,6 @@ void setupRoutes() {
         r->send(200, "application/json", "{\"status\":\"ok\"}");
       });
   server.addHandler(saveHandler);
-
-  server.on("/api/bypass", HTTP_POST, [](AsyncWebServerRequest* r) {
-    bypassMode = !bypassMode;
-    r->send(200, "application/json",
-            bypassMode ? "{\"bypass\":true}" : "{\"bypass\":false}");
-  });
 
   server.on("/api/dmx", HTTP_GET, [](AsyncWebServerRequest* r) {
     static uint8_t snapIn[DMX_PACKET_SIZE];
@@ -262,17 +206,9 @@ void setupRoutes() {
   });
 
   server.on("/api/test/reset", HTTP_POST, [](AsyncWebServerRequest* r) {
+    testMode = false;
     portENTER_CRITICAL(&dmxMux);
-    memcpy(dmxOut, dmxIn, DMX_PACKET_SIZE);
-    portEXIT_CRITICAL(&dmxMux);
-    forceTX = true;
-    r->send(200, "application/json", "{\"status\":\"ok\"}");
-  });
-
-  server.on("/api/test/reset", HTTP_POST, [](AsyncWebServerRequest* r) {
-    portENTER_CRITICAL(&dmxMux);
-    if (bypassMode) memcpy(dmxOut, dmxIn, DMX_PACKET_SIZE);
-    else            applyMappings();
+    applyMappings();
     portEXIT_CRITICAL(&dmxMux);
     forceTX = true;
     r->send(200, "application/json", "{\"status\":\"ok\"}");
@@ -292,7 +228,8 @@ void setupRoutes() {
     portENTER_CRITICAL(&dmxMux);
     dmxOut[ch] = (uint8_t)val;
     portEXIT_CRITICAL(&dmxMux);
-    forceTX = true;
+    testMode = true;
+    forceTX  = true;
     r->send(200, "application/json", "{\"status\":\"ok\"}");
   });
 
@@ -317,30 +254,32 @@ void setupRoutes() {
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
+
   pinMode(LED_RX_PIN,    OUTPUT);
-  pinMode(LED_TX_PIN,    OUTPUT);
-  pinMode(DMX_RX_EN_PIN, OUTPUT);
+  pinMode(DMX_TX_EN_PIN, OUTPUT);
   digitalWrite(LED_RX_PIN,    LOW);
-  digitalWrite(LED_TX_PIN,    LOW);
-  digitalWrite(DMX_RX_EN_PIN, LOW);  // MAX485 RX : permanent listen
+  digitalWrite(DMX_TX_EN_PIN, HIGH);  // MAX485 TX: always emit
 
-  // ── RX: HardwareSerial on UART2 ──
-  Serial2.setRxBufferSize(DMX_BUF_SZ);
-  Serial2.begin(DMX_BAUD, DMX_SERIAL, DMX_RX_PIN, -1);
-  Serial.println("[DMX] RX (UART2 HardwareSerial) OK.");
-
-  // ── TX: esp_dmx on DMX_NUM_1 ──
-  // Only DMX_NUM_1 is stable with esp_dmx 4.1.0 on ESP32-WROOM
-  dmx_config_t config = DMX_CONFIG_DEFAULT;
+  // ── RX: esp_dmx on DMX_NUM_1 (UART1, GPIO16) ──
+  dmx_config_t rxConfig = DMX_CONFIG_DEFAULT;
   dmx_personality_t personalities[] = {};
-  int personality_count = 0;
-  dmx_driver_install(txPort, &config, personalities, personality_count);
+  dmx_driver_install(rxPort, &rxConfig, personalities, 0);
+  dmx_set_pin(rxPort, -1, DMX_RX_PIN, DMX_RX_EN_PIN);
+  Serial.println("[DMX] RX (esp_dmx DMX_NUM_1) OK.");
+
+  // ── TX: esp_dmx on DMX_NUM_0 (UART0, remapped to GPIO17) ──
+  // UART0 is normally used by Serial (USB debug). We free it here so
+  // esp_dmx can use it for TX. Serial.println() calls after this are silent.
+  Serial.println("[DMX] Freeing UART0 for TX...");
+  Serial.flush();
+  Serial.end();  // release UART0 driver
+  dmx_config_t txConfig = DMX_CONFIG_DEFAULT;
+  dmx_driver_install(txPort, &txConfig, personalities, 0);
   dmx_set_pin(txPort, DMX_TX_PIN, -1, DMX_TX_EN_PIN);
-  Serial.println("[DMX] TX (DMX_NUM_1 esp_dmx) OK.");
 
   loadMappings();
 
-  // ssid_hidden=1 : SSID not broadcast — connect manually by name
+  // ssid_hidden=1: SSID not broadcast — connect manually by name
   WiFi.softAP(AP_SSID, AP_PASS, 1, 1);
   Serial.printf("[WiFi] AP: %s  IP: %s\n",
                 AP_SSID, WiFi.softAPIP().toString().c_str());
@@ -366,23 +305,17 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
-  // Swap mappings + NVS save
+  // Swap mappings + NVS save delegated to core 1
   if (mappingsPending) {
     portENTER_CRITICAL(&mappingsMux);
     mappings        = pendingMappings;
     mappingsPending = false;
     portEXIT_CRITICAL(&mappingsMux);
-    Serial.printf("[MAP] %d rule(s).\n", mappings.size());
+    Serial.printf("[MAP] %d rule(s) applied.\n", mappings.size());
   }
   if (saveNeeded) {
     saveNeeded = false;
     doSaveMappings();
-  }
-
-  // Turn off TX LED after flash
-  if (ledTxOffAt && now >= ledTxOffAt) {
-    digitalWrite(LED_TX_PIN, LOW);
-    ledTxOffAt = 0;
   }
 
   // RX activity LED
@@ -394,23 +327,33 @@ void loop() {
     lastToggleAt = now;
   }
 
-  // Read incoming DMX
-  readDMX();
+  // ── DMX reception via esp_dmx (non-blocking, timeout=0) ──
+  dmx_packet_t packet;
+  if (dmx_receive(rxPort, &packet, 0)) {
+    if (packet.err == DMX_OK) {
+      portENTER_CRITICAL(&dmxMux);
+      dmx_read(rxPort, dmxIn, DMX_PACKET_SIZE);
+      // In test mode, preserve dmxOut (test values must not be overwritten)
+      // dmxIn is still updated so the monitor shows the real input
+      if (!testMode) {
+        applyMappings();
+        lastTxAt = now;
+        portEXIT_CRITICAL(&dmxMux);
+        sendDMX();
+      } else {
+        portEXIT_CRITICAL(&dmxMux);
+      }
+      lastFrameAt = now;
+    }
+  }
 
-  if (newPacket) {
-    newPacket = false;
-    portENTER_CRITICAL(&dmxMux);
-    if (bypassMode) memcpy(dmxOut, dmxIn, DMX_PACKET_SIZE);
-    else            applyMappings();
-    portEXIT_CRITICAL(&dmxMux);
-    sendDMX();
-    lastTxAt = now;
-  } else if (forceTX || now - lastTxAt >= DMX_HOLDOVER_MS) {
+  // Holdover + immediate test send
+  if (forceTX || now - lastTxAt >= DMX_HOLDOVER_MS) {
     forceTX  = false;
     lastTxAt = now;
     sendDMX();
   }
 
-  // Watchdog + WiFi breathing
+  // Yield to idle task — feeds watchdog and lets WiFi/TCP breathe
   delay(1);
 }

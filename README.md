@@ -2,11 +2,10 @@
 
 A lightweight DMX512 channel remapper built on an ESP32, designed for live performance venues. It sits between a legacy DMX console and the main DMX line, intercepts incoming frames, and redistributes channels according to configurable rules — all managed through a self-hosted web interface.
 
-> **Built for a real-world scenario:** an old console where all fixtures share the same address. The ESP32 intercepts and remaps channels on the fly, while a modern console (e.g. GrandMA3) connects directly as a bypass.
+> **Built for a real-world scenario:** an old console where all fixtures share the same address. The ESP32 intercepts and remaps channels on the fly, while a modern console (e.g. GrandMA3) connects in parallel on the same DMX line.
 
 ```
 Old console → [ESP32 Remapper] → DMX line → Fixtures
-GrandMA3   ────────────────────→ DMX line → Fixtures (bypass)
 ```
 
 ---
@@ -14,15 +13,14 @@ GrandMA3   ────────────────────→ DMX l
 ## Features
 
 - **Channel remapping** — define named groups, each with a source address, channel count, and multiple destinations
-- **Live monitor** — real-time 512-channel view of both input and output, color-coded by group
+- **Live monitor** — real-time 512-channel view of both input and output, color-coded by group, collapsible panels
 - **Group hover** — hover a group on either grid to highlight it across both grids simultaneously
 - **Output test** — per-channel sliders per group, Full / Zero / 50% shortcuts, immediate send with live feedback
-- **Software bypass** — toggle pass-through mode without touching the hardware
 - **Holdover** — retransmits last known DMX frame if input is lost (500 ms threshold)
 - **mDNS** — accessible at `http://dmx.local` on Mac and iOS with no extra software
 - **Fully offline** — no internet required, no external fonts or CDN, runs entirely on the ESP32 AP
 - **NVS persistence** — configuration saved to flash, survives reboots
-- **RX / TX activity LEDs** — hardware visual feedback
+- **RX activity LED** — hardware visual feedback on incoming signal
 
 ---
 
@@ -33,9 +31,7 @@ GrandMA3   ────────────────────→ DMX l
 | ESP32 DevKit v1 | ESP32-WROOM-32 |
 | MAX485 (×2) | One for RX, one for TX |
 | XLR connectors | 3-pin, female (in) + male (out) |
-| Termination resistors | 120 Ω on the DMX input line |
 | LED RX | GPIO 2 + 100 Ω resistor |
-| LED TX | GPIO 15 + 100 Ω resistor |
 | Power supply | AMS1117-5.0 regulator or USB |
 
 ### Pin mapping
@@ -46,8 +42,7 @@ GrandMA3   ────────────────────→ DMX l
 | 17 | DMX TX — MAX485 DI (transmit) |
 | 4 | MAX485 RX enable (RE+DE, LOW = listen) |
 | 5 | MAX485 TX enable (DE, HIGH = emit) |
-| 2 | RX activity LED (~3 Hz when signal present) |
-| 15 | TX activity LED (30 ms flash per frame) |
+| 2 | RX activity LED (~6 Hz when signal present) |
 
 ---
 
@@ -61,8 +56,8 @@ GrandMA3   ────────────────────→ DMX l
 
 | MAX485 pin | Connect to |
 |---|---|
-| A (D+) | XLR pin 2 — via 120 Ω resistor |
-| B (D−) | XLR pin 3 — via 120 Ω resistor |
+| A (D+) | XLR pin 3 |
+| B (D−) | XLR pin 2 |
 | RO | ESP32 GPIO 16 |
 | RE + DE | ESP32 GPIO 4 (tied together, always LOW) |
 | VCC | 5V |
@@ -74,19 +69,10 @@ GrandMA3   ────────────────────→ DMX l
 |---|---|
 | DI | ESP32 GPIO 17 |
 | DE | ESP32 GPIO 5 (always HIGH) |
-| A (D+) | XLR pin 2 |
-| B (D−) | XLR pin 3 |
+| A (D+) | XLR pin 3 |
+| B (D−) | XLR pin 2 |
 | VCC | 5V |
 | GND | Common GND |
-
-**LEDs**
-
-| LED | GPIO | Resistor | Behavior |
-|---|---|---|---|
-| RX activity | 2 | 100 Ω | Blinks ~3 Hz when DMX input is present |
-| TX activity | 15 | 100 Ω | 30 ms flash on every transmitted frame |
-
-> **120 Ω termination:** place it on the **input side** (between XLR IN and MAX485 RX A/B). The output side termination should go at the **far end of the DMX cable**, on the last fixture — not on the ESP32 output.
 
 > **Power:** power the MAX485 chips at 5V. The ESP32 can be powered via USB or from a 5V regulator (e.g. AMS1117-5.0) from a 12V stage supply.
 
@@ -103,7 +89,9 @@ GrandMA3   ────────────────────→ DMX l
 | AsyncTCP | **3.x** | ESP32Async — Library Manager |
 | ESPmDNS | included | ESP32 core |
 
-> **Important:** `DMX_NUM_2` crashes with esp_dmx 4.1.0 on ESP32-WROOM (known bug [#150](https://github.com/someweisguy/esp_dmx/issues/150)). This project uses a hybrid approach: esp_dmx on `DMX_NUM_1` for TX, and native `HardwareSerial` on UART2 for RX.
+> **Important:** `DMX_NUM_2` crashes with esp_dmx 4.1.0 on ESP32-WROOM (known bug [#150](https://github.com/someweisguy/esp_dmx/issues/150)). This project works around it by using:
+> - **RX** → `esp_dmx` on `DMX_NUM_1` (UART1, GPIO16)
+> - **TX** → `esp_dmx` on `DMX_NUM_0` (UART0, remapped to GPIO17 — UART0 is freed from Serial before installing)
 
 ---
 
@@ -116,12 +104,14 @@ GrandMA3   ────────────────────→ DMX l
 5. Select your board: **ESP32 Dev Module**
 6. Flash to your ESP32
 
+> **Note:** Serial debug output is only available during the initial setup phase. Once `Serial.end()` is called to free UART0 for DMX TX, subsequent `Serial.println()` calls are silent. All startup messages are printed before this point.
+
 ---
 
 ## Usage
 
 1. Power the ESP32
-2. Connect to the WiFi AP: **`DMXR`** / password: **`dmx12345`**
+2. Connect to the WiFi AP: **`DMXR`** (hidden SSID) / password: **`dmx12345`**
 3. Open **`http://dmx.local`** in your browser (or `http://192.168.4.1` on Windows/Android)
 4. Configure your remap rules in the **Configuration** tab
 5. Click **Save** — the ESP32 will restart and apply the new rules
@@ -133,17 +123,17 @@ GrandMA3   ────────────────────→ DMX l
 ## Web interface
 
 ### Monitor
-Real-time dual grid showing all 512 channels — input (orange) and output (cyan). Each configured group is color-coded with a border, label, and cross-grid hover highlight.
+Real-time dual grid showing all 512 channels — input (orange) and output (cyan). Each configured group is color-coded with a border, label, and cross-grid hover highlight. Each panel can be collapsed by clicking its title.
 
 ### Configuration
 Add, edit, and delete remap rules. Each rule defines:
 - **Name** — label shown in the monitor and test views
 - **Source address** — first DMX channel to read from
 - **Channels** — how many consecutive channels to copy
-- **Destinations** — one or more target addresses, added with the **+** button
+- **Destinations** — one or more target addresses, added with the **+** button (auto-increments by channel count)
 
 ### Output test
-Send test values directly to output channels without needing a console connected. Per-channel sliders for each group, with Full / Zero / 50% shortcuts. A **Back to live** button reapplies the remap rules from the current input.
+Send test values directly to output channels without needing a console connected. Incoming DMX is frozen in `dmxOut` while a test is active — the monitor still shows live input. A **Back to live** button reapplies the remap rules from the current input.
 
 ---
 
@@ -158,17 +148,17 @@ const char* AP_SSID = "DMXR";
 const char* AP_PASS = "dmx12345";
 ```
 
-**You must change `AP_PASS` before deploying.** The minimum WPA2 password length is 8 characters. Anyone within WiFi range who knows the default password can access the interface and modify your DMX configuration.
+**You must change `AP_PASS` before deploying.** The minimum WPA2 password length is 8 characters.
 
 ### Hidden SSID
 
-By default, the SSID is **not broadcast** — it won't appear in the list of available networks. To connect, you must enter the network name manually:
+By default, the SSID is **not broadcast** — it won't appear in the list of available networks. To connect, enter the network name manually:
 
 - **macOS:** WiFi menu → "Other…" → enter `DMXR` and the password
 - **iOS:** Settings → Wi-Fi → "Other…" → enter name and password
 - **Windows:** WiFi settings → "Hidden network" → enter name and password
 
-This adds a basic layer of obscurity in a venue environment. To make the SSID visible (e.g. during setup), change the `softAP` call in `main.cpp`:
+To make the SSID visible (e.g. during setup), change the `softAP` call in `main.cpp`:
 
 ```cpp
 // Hidden (default)
@@ -180,12 +170,12 @@ WiFi.softAP(AP_SSID, AP_PASS);
 
 ---
 
-
+## WiFi & network
 
 | Setting | Value |
 |---|---|
-| SSID | `DMXR` |
-| Password | `dmx12345` |
+| SSID | `DMXR` (hidden) |
+| Password | `dmx12345` ⚠️ change before deploying |
 | IP address | `192.168.4.1` |
 | mDNS hostname | `dmx.local` |
 | Protocol | HTTP (port 80) |
@@ -199,12 +189,11 @@ mDNS works natively on **macOS** and **iOS**. On **Windows**, install [Bonjour](
 | Endpoint | Method | Description |
 |---|---|---|
 | `/` | GET | Web interface |
-| `/api/config` | GET | Get current rules + bypass state |
+| `/api/config` | GET | Get current rules |
 | `/api/config` | POST | Save rules (JSON body) |
-| `/api/bypass` | POST | Toggle bypass mode |
 | `/api/dmx` | GET | Live snapshot `{in:[...], out:[...]}` |
-| `/api/test` | POST | Set output channel (`ch`, `val` params) |
-| `/api/test/reset` | POST | Reapply rules from current input |
+| `/api/test` | POST | Set output channel (`ch`, `val` params) — activates test mode |
+| `/api/test/reset` | POST | Exit test mode, reapply rules from current input |
 | `/api/ping` | GET | Health check |
 | `/api/reboot` | POST | Restart ESP32 |
 | `/api/reset` | POST | Clear NVS config + restart |

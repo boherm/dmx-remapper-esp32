@@ -42,7 +42,7 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 16px 24px;
+    padding: 12px 24px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
@@ -62,26 +62,6 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   header h1 { font-size: 18px; font-weight: 700; letter-spacing: .04em; }
   header h1 span { color: var(--accent); }
 
-  .header-right {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .status-pill {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    padding: 5px 12px;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted);
-  }
-
   .dot {
     width: 7px; height: 7px;
     border-radius: 50%;
@@ -90,24 +70,9 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   .dot-ok    { background: var(--ok);     animation: pulse 2s infinite; }
   .dot-in    { background: var(--accent); animation: pulse 1.5s infinite; }
   .dot-out   { background: var(--cyan);   animation: pulse 1.5s infinite; }
-  .dot-rules { background: var(--accent2); }
 
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-  #bypass-btn {
-    padding: 7px 16px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text);
-    border-radius: 6px;
-    font-family: var(--mono);
-    font-size: 12px;
-    cursor: pointer;
-    transition: all .2s;
-    white-space: nowrap;
-  }
-  #bypass-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
-  #bypass-btn:hover  { border-color: var(--accent); }
 
   /* Tabs */
   .tabs {
@@ -158,7 +123,10 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 14px;
+    transition: padding .2s;
   }
+  .monitor-panel.collapsed { padding-bottom: 14px; }
+  .monitor-panel.collapsed .dmx-grid { display: none; }
 
   .monitor-panel-title {
     font-family: var(--mono);
@@ -170,7 +138,18 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     align-items: center;
     gap: 8px;
     color: var(--muted);
+    cursor: pointer;
+    user-select: none;
   }
+  .monitor-panel.collapsed .monitor-panel-title { margin-bottom: 0; }
+
+  .collapse-icon {
+    margin-left: auto;
+    font-size: 10px;
+    transition: transform .2s;
+    opacity: .5;
+  }
+  .monitor-panel.collapsed .collapse-icon { transform: rotate(-90deg); }
 
   .dmx-grid {
     display: grid;
@@ -573,11 +552,6 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
 <header>
   <div class="logo">DMX</div>
   <h1>DMX <span>Remapper</span></h1>
-  <div class="header-right">
-    <div class="status-pill"><span class="dot dot-ok"></span>dmx.local</div>
-    <div class="status-pill" id="pill-rules"><span class="dot dot-rules"></span>…</div>
-    <button id="bypass-btn" onclick="toggleBypass()">⚡ BYPASS OFF</button>
-  </div>
 </header>
 
 <div class="tabs">
@@ -589,15 +563,17 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
 <div class="tab-panel active" id="tab-monitor">
   <div class="section-title">DMX Channels — live 5 Hz</div>
   <div class="monitor-cols">
-    <div class="monitor-panel">
-      <div class="monitor-panel-title">
+    <div class="monitor-panel" id="panel-in">
+      <div class="monitor-panel-title" onclick="togglePanel('panel-in')">
         <span class="dot dot-in"></span>Input · console
+        <span class="collapse-icon">▾</span>
       </div>
       <div class="dmx-grid" id="grid-in"></div>
     </div>
-    <div class="monitor-panel">
-      <div class="monitor-panel-title">
+    <div class="monitor-panel" id="panel-out">
+      <div class="monitor-panel-title" onclick="togglePanel('panel-out')">
         <span class="dot dot-out"></span>Output · DMX line
+        <span class="collapse-icon">▾</span>
       </div>
       <div class="dmx-grid" id="grid-out"></div>
     </div>
@@ -663,6 +639,10 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     else stopMonitor();
     // Test: do NOT rebuild on every visit — just restore values
     if (name === 'test') restoreTestState();
+  }
+
+  function togglePanel(id) {
+    document.getElementById(id).classList.toggle('collapsed');
   }
 
   function startMonitor() {
@@ -970,6 +950,7 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     if (isNaN(ch)||ch<1||ch>512)  { toast('✗ Invalid channel','err'); return; }
     if (isNaN(val)||val<0||val>255){ toast('✗ Invalid value','err'); return; }
     await sendRaw(ch, val);
+    setLiveBtn(true);
     showResult('✓ Channel ' + ch + ' → ' + val);
   }
 
@@ -986,17 +967,8 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
       if (Array.isArray(m.dests)) m.dests.sort((a, b) => a - b);
     });
     renderTable();
-    updatePill();
     buildGrids();
     buildTestGroups();
-    const btn = document.getElementById('bypass-btn');
-    if (config.bypass) {
-      btn.textContent = '⚡ BYPASS ON';
-      btn.classList.add('active');
-    } else {
-      btn.textContent = '⚡ BYPASS OFF';
-      btn.classList.remove('active');
-    }
   }
 
   function renderTable() {
@@ -1091,14 +1063,12 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   function addRow() {
     config.mappings.push({ label: 'New group', src: 1, channels: 8, dests: [] });
     renderTable();
-    updatePill();
     document.getElementById('mapping-list').lastElementChild?.scrollIntoView({ behavior:'smooth', block:'center' });
   }
 
   function deleteRow(i) {
     config.mappings.splice(i, 1);
     renderTable();
-    updatePill();
   }
 
   async function waitAndReload() {
@@ -1139,20 +1109,6 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     if (!confirm('Restart the ESP32?')) return;
     toast('Restarting…', 'ok');
     fireReboot();
-  }
-
-  async function toggleBypass() {
-    const r = await fetch('/api/bypass', { method: 'POST' });
-    const j = await r.json();
-    const btn = document.getElementById('bypass-btn');
-    btn.textContent = j.bypass ? '⚡ BYPASS ON' : '⚡ BYPASS OFF';
-    btn.classList.toggle('active', j.bypass);
-  }
-
-  function updatePill() {
-    const n = config.mappings.length;
-    document.getElementById('pill-rules').innerHTML =
-      '<span class="dot dot-rules"></span>' + n + ' rule' + (n!==1?'s':'');
   }
 
   function toast(msg, type) {
