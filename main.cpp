@@ -55,8 +55,12 @@ const char* AP_SSID = "DMXR";
 const char* AP_PASS = "dmx12345";
 
 // ─── Web + NVS ───────────────────────────────────────────────────────────────
-AsyncWebServer server(80);
-Preferences    prefs;
+AsyncWebServer  server(80);
+AsyncEventSource events("/api/events");
+Preferences     prefs;
+
+#define SSE_THROTTLE_MS 70
+static uint32_t lastSseAt = 0;
 
 // ─── Mappings ────────────────────────────────────────────────────────────────
 struct MappingEntry {
@@ -151,6 +155,25 @@ void loadMappings() {
   Serial.printf("[NVS] %d rule(s).\n", mappings.size());
 }
 
+// ─── SSE push — builds JSON and sends to all connected clients ───────────────
+void pushSse() {
+  static uint8_t snapIn[DMX_PACKET_SIZE];
+  static uint8_t snapOut[DMX_PACKET_SIZE];
+  portENTER_CRITICAL(&dmxMux);
+  memcpy(snapIn,  dmxIn,  DMX_PACKET_SIZE);
+  memcpy(snapOut, dmxOut, DMX_PACKET_SIZE);
+  portEXIT_CRITICAL(&dmxMux);
+  String s;
+  s.reserve(4300);
+  s = "{\"in\":[";
+  for (int i = 1; i < DMX_PACKET_SIZE; i++) { s += snapIn[i];  if (i < DMX_PACKET_SIZE-1) s += ','; }
+  s += "],\"out\":[";
+  for (int i = 1; i < DMX_PACKET_SIZE; i++) { s += snapOut[i]; if (i < DMX_PACKET_SIZE-1) s += ','; }
+  s += "]}";
+  events.send(s.c_str(), "dmx", millis());
+  lastSseAt = millis();
+}
+
 // ─── Web routes ──────────────────────────────────────────────────────────────
 void setupRoutes() {
 
@@ -188,22 +211,11 @@ void setupRoutes() {
       });
   server.addHandler(saveHandler);
 
-  server.on("/api/dmx", HTTP_GET, [](AsyncWebServerRequest* r) {
-    static uint8_t snapIn[DMX_PACKET_SIZE];
-    static uint8_t snapOut[DMX_PACKET_SIZE];
-    portENTER_CRITICAL(&dmxMux);
-    memcpy(snapIn,  dmxIn,  DMX_PACKET_SIZE);
-    memcpy(snapOut, dmxOut, DMX_PACKET_SIZE);
-    portEXIT_CRITICAL(&dmxMux);
-    String s;
-    s.reserve(4300);
-    s = "{\"in\":[";
-    for (int i = 1; i < DMX_PACKET_SIZE; i++) { s += snapIn[i];  if (i < DMX_PACKET_SIZE-1) s += ','; }
-    s += "],\"out\":[";
-    for (int i = 1; i < DMX_PACKET_SIZE; i++) { s += snapOut[i]; if (i < DMX_PACKET_SIZE-1) s += ','; }
-    s += "]}";
-    r->send(200, "application/json", s);
+  // SSE endpoint — client subscribes once, server pushes at ~14 Hz
+  events.onConnect([](AsyncEventSourceClient* client) {
+    client->send("connected", "info", millis());
   });
+  server.addHandler(&events);
 
   server.on("/api/test/reset", HTTP_POST, [](AsyncWebServerRequest* r) {
     testMode = false;
@@ -333,8 +345,6 @@ void loop() {
     if (packet.err == DMX_OK) {
       portENTER_CRITICAL(&dmxMux);
       dmx_read(rxPort, dmxIn, DMX_PACKET_SIZE);
-      // In test mode, preserve dmxOut (test values must not be overwritten)
-      // dmxIn is still updated so the monitor shows the real input
       if (!testMode) {
         applyMappings();
         lastTxAt = now;
@@ -352,6 +362,11 @@ void loop() {
     forceTX  = false;
     lastTxAt = now;
     sendDMX();
+  }
+
+  // SSE push — throttled to SSE_THROTTLE_MS, only if clients connected
+  if (events.count() > 0 && now - lastSseAt >= SSE_THROTTLE_MS) {
+    pushSse();
   }
 
   // Yield to idle task — feeds watchdog and lets WiFi/TCP breathe

@@ -13,7 +13,7 @@ Old console → [ESP32 Remapper] → DMX line → Fixtures
 ## Features
 
 - **Channel remapping** — define named groups, each with a source address, channel count, and multiple destinations
-- **Live monitor** — real-time 512-channel view of both input and output, color-coded by group, collapsible panels
+- **Live monitor** — real-time 512-channel view of both input and output, color-coded by group, collapsible panels — powered by Server-Sent Events (~14 Hz, no polling)
 - **Group hover** — hover a group on either grid to highlight it across both grids simultaneously
 - **Output test** — per-channel sliders per group, Full / Zero / 50% shortcuts, immediate send with live feedback
 - **Holdover** — retransmits last known DMX frame if input is lost (500 ms threshold)
@@ -123,7 +123,7 @@ Old console → [ESP32 Remapper] → DMX line → Fixtures
 ## Web interface
 
 ### Monitor
-Real-time dual grid showing all 512 channels — input (orange) and output (cyan). Each configured group is color-coded with a border, label, and cross-grid hover highlight. Each panel can be collapsed by clicking its title.
+Real-time dual grid showing all 512 channels — input (orange) and output (cyan). Each configured group is color-coded with a border, label, and cross-grid hover highlight. Each panel can be collapsed by clicking its title. Data is pushed via **Server-Sent Events** (SSE) at up to ~14 Hz — the ESP32 pushes updates as they arrive, with a 70 ms throttle. No polling.
 
 ### Configuration
 Add, edit, and delete remap rules. Each rule defines:
@@ -191,7 +191,7 @@ mDNS works natively on **macOS** and **iOS**. On **Windows**, install [Bonjour](
 | `/` | GET | Web interface |
 | `/api/config` | GET | Get current rules |
 | `/api/config` | POST | Save rules (JSON body) |
-| `/api/dmx` | GET | Live snapshot `{in:[...], out:[...]}` |
+| `/api/events` | GET (SSE) | Server-Sent Events stream `{in:[...], out:[...]}` at ~14 Hz |
 | `/api/test` | POST | Set output channel (`ch`, `val` params) — activates test mode |
 | `/api/test/reset` | POST | Exit test mode, reapply rules from current input |
 | `/api/ping` | GET | Health check |
