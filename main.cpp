@@ -84,6 +84,12 @@ bool hasTestActive() {
   return false;
 }
 
+// ─── Input state ──────────────────────────────────────────────────────────────
+// gracePending > 0 : ignore input frames (grace after first connect / reconnect)
+#define RECONNECT_STABLE_FRAMES 5
+static int  gracePending      = 0;
+static bool inputEverReceived = false;
+
 portMUX_TYPE dmxMux = portMUX_INITIALIZER_UNLOCKED;
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -355,10 +361,9 @@ void setup() {
   server.begin();
   Serial.println("[HTTP] Port 80 OK");
 
-  // Initial zero send
-  sendDMX();
+  // Do not send DMX at boot — wait for first valid input frames (grace period)
+  // This avoids briefly zeroing fixtures on ESP32 restart
   lastTxAt = millis();
-  Serial.println("[DMX] Initial signal sent.");
 }
 
 // ─── Loop (core 1) ───────────────────────────────────────────────────────────
@@ -403,19 +408,43 @@ void loop() {
     if (packet.err == DMX_OK) {
       portENTER_CRITICAL(&dmxMux);
       dmx_read(rxPort, dmxIn, DMX_PACKET_SIZE);
-      applyMappings();
-      // Overlay per-channel test values — only tested channels are frozen
-      for (int i = 1; i < DMX_PACKET_SIZE; i++)
-        if (testActive[i]) dmxOut[i] = testVals[i];
-      portEXIT_CRITICAL(&dmxMux);
+
+      if (!inputEverReceived) {
+        // First frame ever — start grace, do not apply yet
+        inputEverReceived = true;
+        gracePending = RECONNECT_STABLE_FRAMES - 1; // this frame counts as 1
+      } else if (gracePending > 0) {
+        gracePending--;
+      }
+
+      if (gracePending == 0) {
+        // Grace over — apply input and send
+        applyMappings();
+        for (int i = 1; i < DMX_PACKET_SIZE; i++)
+          if (testActive[i]) dmxOut[i] = testVals[i];
+        portEXIT_CRITICAL(&dmxMux);
+        lastTxAt = now;
+        sendDMX();
+      } else {
+        // Still in grace — holdover keeps sending last good values
+        portEXIT_CRITICAL(&dmxMux);
+      }
       lastFrameAt = now;
-      lastTxAt    = now;
-      sendDMX();
     }
   }
 
-  // Holdover + immediate test send
-  if (forceTX || now - lastTxAt >= DMX_HOLDOVER_MS) {
+  // Signal loss → arm grace for next reconnection
+  if (inputEverReceived && gracePending == 0 && now - lastFrameAt > DMX_HOLDOVER_MS) {
+    gracePending = RECONNECT_STABLE_FRAMES;
+  }
+
+  // Holdover:
+  // - forceTX (test) always fires regardless of input state
+  // - automatic holdover only fires after first valid data has been applied
+  //   (inputEverReceived + grace done), so zeros are never sent at boot
+  // - during reconnect grace (gracePending > 0 but inputEverReceived), holdover
+  //   still fires to keep sending last good dmxOut values
+  if (forceTX || (inputEverReceived && now - lastTxAt >= DMX_HOLDOVER_MS)) {
     forceTX  = false;
     lastTxAt = now;
     sendDMX();

@@ -16,6 +16,7 @@ Old console → [ESP32 Remapper] → DMX line → Fixtures
 - **Live monitor** — real-time 512-channel view of both input and output, color-coded by group, collapsible panels — powered by Server-Sent Events (~14 Hz, no polling)
 - **Group hover** — hover a group on either grid to highlight it across both grids simultaneously
 - **Output test** — per-channel sliders per group, Full / Zero / 50% shortcuts, immediate send with live feedback
+- **Reconnection grace period** — ignores the first 5 DMX frames after startup or signal reconnection, preventing corrupt or transitional frames from flickering fixtures. No DMX is emitted at all until valid frames are received, so fixtures are never briefly zeroed on ESP32 restart
 - **Holdover** — retransmits last known DMX frame if input is lost (500 ms threshold)
 - **mDNS** — accessible at `http://dmx.local` on Mac and iOS with no extra software
 - **Fully offline** — no internet required, no external fonts or CDN, runs entirely on the ESP32 AP
