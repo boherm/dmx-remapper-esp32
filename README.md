@@ -20,7 +20,7 @@ Old console → [ESP32 Remapper] → DMX line → Fixtures
 - **mDNS** — accessible at `http://dmx.local` on Mac and iOS with no extra software
 - **Fully offline** — no internet required, no external fonts or CDN, runs entirely on the ESP32 AP
 - **NVS persistence** — configuration saved to flash, survives reboots
-- **RX activity LED** — hardware visual feedback on incoming signal
+- **RX activity LED** — fast blink (~6 Hz) when live DMX signal is present; slow double-blink pattern when test mode is active
 
 ---
 
@@ -42,7 +42,7 @@ Old console → [ESP32 Remapper] → DMX line → Fixtures
 | 17 | DMX TX — MAX485 DI (transmit) |
 | 4 | MAX485 RX enable (RE+DE, LOW = listen) |
 | 5 | MAX485 TX enable (DE, HIGH = emit) |
-| 2 | RX activity LED (~6 Hz when signal present) |
+| 2 | RX activity LED (~6 Hz when signal present — double-blink when test mode active) |
 
 ---
 

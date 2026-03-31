@@ -344,7 +344,17 @@ void loop() {
   }
 
   // RX activity LED
-  if (now - lastFrameAt > LED_TIMEOUT_MS) {
+  // Live mode : fast blink ~6 Hz when signal present, off if no signal
+  // Test mode : slow double-blink pattern regardless of signal
+  if (testMode) {
+    // Double-blink: ON 80ms, OFF 80ms, ON 80ms, OFF 560ms (period = 800ms)
+    uint32_t phase = now % 800;
+    bool on = (phase < 80) || (phase >= 160 && phase < 240);
+    if (on != ledState) {
+      ledState = on;
+      digitalWrite(LED_RX_PIN, on ? HIGH : LOW);
+    }
+  } else if (now - lastFrameAt > LED_TIMEOUT_MS) {
     if (ledState) { ledState = false; digitalWrite(LED_RX_PIN, LOW); }
   } else if (now - lastToggleAt >= LED_TOGGLE_MS) {
     ledState = !ledState;
