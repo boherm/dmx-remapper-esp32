@@ -89,6 +89,7 @@ bool hasTestActive() {
 #define RECONNECT_STABLE_FRAMES 5
 static int  gracePending      = 0;
 static bool inputEverReceived = false;
+static bool hasValidOutput    = false; // true after first grace completes — gates holdover
 
 portMUX_TYPE dmxMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -422,6 +423,7 @@ void loop() {
         applyMappings();
         for (int i = 1; i < DMX_PACKET_SIZE; i++)
           if (testActive[i]) dmxOut[i] = testVals[i];
+        hasValidOutput = true;
         portEXIT_CRITICAL(&dmxMux);
         lastTxAt = now;
         sendDMX();
@@ -440,11 +442,11 @@ void loop() {
 
   // Holdover:
   // - forceTX (test) always fires regardless of input state
-  // - automatic holdover only fires after first valid data has been applied
-  //   (inputEverReceived + grace done), so zeros are never sent at boot
-  // - during reconnect grace (gracePending > 0 but inputEverReceived), holdover
-  //   still fires to keep sending last good dmxOut values
-  if (forceTX || (inputEverReceived && now - lastTxAt >= DMX_HOLDOVER_MS)) {
+  // - automatic holdover only fires after first grace completes (hasValidOutput)
+  //   so zeros are never sent at boot or on first connection
+  // - during reconnect grace, hasValidOutput is already true so holdover
+  //   correctly sends last good dmxOut values
+  if (forceTX || (hasValidOutput && now - lastTxAt >= DMX_HOLDOVER_MS)) {
     forceTX  = false;
     lastTxAt = now;
     sendDMX();
