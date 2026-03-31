@@ -180,8 +180,8 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   .bar-in  { background: var(--accent); }
   .bar-out { background: var(--cyan); }
 
-  .ch-cell .val { position: relative; z-index: 1; display: block; line-height: 1.5; margin-top: 10px; }
-  .ch-cell .ch  { display: block; font-size: 7px; color: var(--muted); position: relative; z-index: 1; }
+  .ch-cell .val { position: relative; z-index: 1; display: block; line-height: 1.5; margin-top: 10px; color: var(--text); }
+  .ch-cell .ch  { display: block; font-size: 7px; color: #6b7280; position: relative; z-index: 1; }
 
   /* Group label on the first cell */
   .grp-label {
