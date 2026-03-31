@@ -132,6 +132,41 @@ Add, edit, and delete remap rules. Each rule defines:
 - **Channels** — how many consecutive channels to copy
 - **Destinations** — one or more target addresses, added with the **+** button (auto-increments by channel count)
 
+#### Remapping behavior
+
+The output is built in two passes on every incoming DMX frame:
+
+**Pass 1 — pass-through:** all 512 channels are copied as-is to the output. Any channel that has no rule applied to it will appear unchanged in the output.
+
+**Pass 2 — remap:** for each rule, the source channel range is **zeroed out** at its original position (it no longer passes through), then its values are written to each configured destination.
+
+> If a rule has no destinations configured, the source channels are left untouched and pass through normally.
+
+**Examples:**
+
+| Scenario | Input | Output |
+|---|---|---|
+| Channel 40, no rule | 40 = 180 | 40 = 180 ✓ pass-through |
+| Channel 20 → destination 24 | 20 = 255 | 20 = 0, 24 = 255 |
+| Channel 20 → destinations 24 and 28 | 20 = 200 | 20 = 0, 24 = 200, 28 = 200 |
+| Channel 40, targeted by another rule | 40 = 180 (pass-through) | 40 = value from that rule's source |
+
+**Practical case — splitting a group of fixtures sharing the same address:**
+
+```
+Old console sends channels 1–8 to address 1
+→ All fixtures respond together
+
+Remap rule:  src=1, channels=8, destinations=[1, 9, 17, 25]
+→ Output:    channels 1–8 = 0 (source zeroed)
+             channels 1–8 = input 1–8   (dest 1)
+             channels 9–16 = input 1–8  (dest 9)
+             channels 17–24 = input 1–8 (dest 17)
+             channels 25–32 = input 1–8 (dest 25)
+```
+
+Note: destination 1 overlaps with the source. The source is zeroed in pass 1, then written again in pass 2 — so the value is correctly restored at address 1.
+
 ### Output test
 Send test values directly to output channels without needing a console connected. Incoming DMX is frozen in `dmxOut` while a test is active — the monitor still shows live input. A **Back to live** button reapplies the remap rules from the current input.
 

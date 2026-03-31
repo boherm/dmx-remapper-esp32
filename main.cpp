@@ -90,12 +90,29 @@ void sendDMX() {
 }
 
 // ─── Remapping ───────────────────────────────────────────────────────────────
+// Logic:
+//   1. All channels pass through by default (memcpy)
+//   2. Source channels of a mapping are zeroed out — they no longer appear
+//      at their original position in the output
+//   3. Source values are copied to each destination (overwrites whatever
+//      was there, including pass-through values from another group)
 void applyMappings() {
   memcpy(dmxOut, dmxIn, DMX_PACKET_SIZE);
+
+  // Pass 1: zero out all source channels that have at least one destination
+  for (auto& m : mappings) {
+    if (m.srcAddr < 1 || m.srcAddr > 512) continue;
+    if (m.destAddrs.empty()) continue;
+    for (int c = 0; c < m.channels; c++) {
+      int si = m.srcAddr + c;
+      if (si < DMX_PACKET_SIZE) dmxOut[si] = 0;
+    }
+  }
+
+  // Pass 2: copy source values to all destinations
   for (auto& m : mappings) {
     if (m.srcAddr < 1 || m.srcAddr > 512) continue;
     for (int dest : m.destAddrs) {
-      if (dest == m.srcAddr) continue;
       for (int c = 0; c < m.channels; c++) {
         int si = m.srcAddr + c, di = dest + c;
         if (si >= DMX_PACKET_SIZE || di >= DMX_PACKET_SIZE) break;
