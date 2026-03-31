@@ -174,11 +174,24 @@ void pushSse() {
   lastSseAt = millis();
 }
 
-// ─── Web routes ──────────────────────────────────────────────────────────────
+// ─── Favicon ─────────────────────────────────────────────────────────────────
+static const char FAVICON_SVG[] PROGMEM =
+  "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 36 36\">"
+  "<rect width=\"36\" height=\"36\" rx=\"6\" fill=\"#ff6b1a\"/>"
+  "<text x=\"18\" y=\"25\" text-anchor=\"middle\" "
+  "font-family=\"ui-monospace,monospace\" font-size=\"13\" "
+  "font-weight=\"bold\" fill=\"#000\">DMX</text>"
+  "</svg>";
+
+
 void setupRoutes() {
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* r) {
     r->send(200, "text/html", getWebUI());
+  });
+
+  server.on("/favicon.svg", HTTP_GET, [](AsyncWebServerRequest* r) {
+    r->send_P(200, "image/svg+xml", FAVICON_SVG);
   });
 
   server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest* r) {
