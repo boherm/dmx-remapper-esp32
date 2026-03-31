@@ -209,7 +209,9 @@ void pushSse() {
   for (int i = 1; i < DMX_PACKET_SIZE; i++) {
     if (snapTest[i]) { if (!first) s += ','; s += i; first = false; }
   }
-  s += "]}";
+  // Input connected = signal received recently
+  bool inputConnected = (millis() - lastFrameAt) < DMX_HOLDOVER_MS;
+  s += inputConnected ? "],\"input\":true}" : "],\"input\":false}";
   events.send(s.c_str(), "dmx", millis());
   lastSseAt = millis();
 }

@@ -33,34 +33,37 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
 
   /* Header */
   header {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 12px 24px;
+    gap: 10px;
+    padding: 8px 20px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    background: var(--bg);
+    z-index: 10;
   }
 
   .logo {
-    width: 36px; height: 36px;
+    width: 28px; height: 28px;
     background: var(--accent);
-    border-radius: 6px;
+    border-radius: 5px;
     display: flex; align-items: center; justify-content: center;
     font-family: var(--mono);
-    font-size: 15px;
+    font-size: 11px;
     font-weight: bold;
     color: #000;
     flex-shrink: 0;
   }
 
-  header h1 { font-size: 18px; font-weight: 700; letter-spacing: .04em; }
+  header h1 { font-size: 15px; font-weight: 700; letter-spacing: .04em; }
   header h1 span { color: var(--accent); }
 
   .dot {
@@ -78,19 +81,22 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   /* Tabs */
   .tabs {
     display: flex;
+    justify-content: center;
     border-bottom: 1px solid var(--border);
-    padding: 0 24px;
+    padding: 0;
     flex-shrink: 0;
+    background: var(--bg);
+    z-index: 10;
   }
 
   .tab-btn {
-    padding: 12px 22px;
+    padding: 8px 16px;
     background: none;
     border: none;
     border-bottom: 2px solid transparent;
     color: var(--muted);
     font-family: var(--sans);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all .15s;
@@ -101,7 +107,7 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab-btn.testing { color: var(--accent) !important; }
 
-  .tab-panel { display: none; flex: 1; padding: 24px; overflow-y: auto; }
+  .tab-panel { display: none; flex: 1; padding: 10px; overflow-y: auto; height: 100%; }
   .tab-panel.active { display: block; }
 
   .section-title {
@@ -138,7 +144,7 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     display: flex;
     align-items: center;
     gap: 8px;
-    color: var(--muted);
+    color: var(--text);
     cursor: pointer;
     user-select: none;
   }
@@ -154,7 +160,7 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
 
   .dmx-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(10%, 1fr));
     gap: 0;
   }
 
@@ -570,14 +576,15 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   <div class="monitor-cols">
     <div class="monitor-panel" id="panel-in">
       <div class="monitor-panel-title" onclick="togglePanel('panel-in')">
-        <span class="dot dot-in"></span>Input · console
+        Input · console
+        <span id="input-status" style="font-size:10px;margin-left:6px;font-family:var(--sans)"></span>
         <span class="collapse-icon">▾</span>
       </div>
       <div class="dmx-grid" id="grid-in"></div>
     </div>
     <div class="monitor-panel" id="panel-out">
       <div class="monitor-panel-title" onclick="togglePanel('panel-out')">
-        <span class="dot dot-out"></span>Output · DMX line
+        Output · DMX line
         <span class="collapse-icon">▾</span>
       </div>
       <div class="dmx-grid" id="grid-out"></div>
@@ -634,13 +641,23 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
 <script>
   let config = { mappings: [] };
   let dmxEventSource = null;
+  const tabScroll = {};  // scroll position memory per tab name
 
   function showTab(name, btn) {
+    // Save scroll position of current active panel
+    const current = document.querySelector('.tab-panel.active');
+    if (current) tabScroll[current.id] = current.scrollTop;
+
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('tab-' + name).classList.add('active');
+    const panel = document.getElementById('tab-' + name);
+    panel.classList.add('active');
     btn.classList.add('active');
-    if (name === 'monitor') { startMonitor(); }
+
+    // Restore saved scroll position (or go to top)
+    panel.scrollTop = tabScroll['tab-' + name] || 0;
+
+    if (name === 'monitor') startMonitor();
     else stopMonitor();
     if (name === 'test') restoreTestState();
   }
@@ -665,7 +682,18 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     dmxEventSource = new EventSource('/api/events');
     dmxEventSource.addEventListener('dmx', e => {
       try {
-        const { in: vi, out: vo, test: tested } = JSON.parse(e.data);
+        const { in: vi, out: vo, test: tested, input: inputOn } = JSON.parse(e.data);
+        // Input status indicator
+        const st = document.getElementById('input-status');
+        if (st) {
+          if (inputOn) {
+            st.textContent = '● connected';
+            st.style.color = 'var(--ok)';
+          } else {
+            st.textContent = '● no signal';
+            st.style.color = 'var(--danger)';
+          }
+        }
         // Clear previous test highlights
         document.querySelectorAll('#grid-out .ch-testing')
           .forEach(c => c.classList.remove('ch-testing'));
