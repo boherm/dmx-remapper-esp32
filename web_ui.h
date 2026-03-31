@@ -206,9 +206,11 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   .dmx-grid.hovering-peer .ch-cell     { opacity: .15; transition: opacity .12s; }
   .dmx-grid.hovering-peer .ch-cell.hov { opacity: 1; }
 
-  /* Active test channel — amber outline on output cells */
-  .ch-cell.tested { outline: 1px dashed #f59e0b; outline-offset: -2px; }
-  .ch-cell.tested .bar { background: #f59e0b !important; opacity: .4; }
+  /* Active test channel — red tint on output cells */
+  .ch-cell.ch-testing {
+    background: rgba(220,38,38,.2) !important;
+    border-color: #dc2626 !important;
+  }
 
   /* Carte de test active */
   .test-card.is-tested { border-color: #f59e0b; background: rgba(245,158,11,.04); }
@@ -545,6 +547,8 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
   @media (max-width: 700px) {
     .monitor-cols { grid-template-columns: 1fr; }
     .mapping-row  { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto; }
+    /* iOS zooms in when input font-size < 16px — prevent that */
+    input, select, textarea { font-size: 16px !important; }
   }
 </style>
 </head>
@@ -661,10 +665,20 @@ static const char WEB_UI[] PROGMEM = R"rawhtml(
     dmxEventSource = new EventSource('/api/events');
     dmxEventSource.addEventListener('dmx', e => {
       try {
-        const { in: vi, out: vo } = JSON.parse(e.data);
+        const { in: vi, out: vo, test: tested } = JSON.parse(e.data);
+        // Clear previous test highlights
+        document.querySelectorAll('#grid-out .ch-testing')
+          .forEach(c => c.classList.remove('ch-testing'));
         for (let i = 0; i < 512; i++) {
           setCell('in',  i+1, vi[i]||0);
           setCell('out', i+1, vo[i]||0);
+        }
+        // Highlight tested output channels
+        if (tested && tested.length) {
+          tested.forEach(ch => {
+            const cell = document.getElementById('out-' + ch);
+            if (cell) cell.classList.add('ch-testing');
+          });
         }
       } catch(err) {}
     });

@@ -75,7 +75,14 @@ std::vector<MappingEntry> mappings;
 std::vector<MappingEntry> pendingMappings;
 volatile bool mappingsPending = false;
 volatile bool saveNeeded      = false;
-volatile bool testMode        = false;  // when true, dmxOut is not overwritten by incoming DMX
+// Per-channel test state — only tested channels are frozen in dmxOut
+static uint8_t testVals[DMX_PACKET_SIZE]   = {0};     // test values per channel
+static bool    testActive[DMX_PACKET_SIZE] = {false}; // which channels are being tested
+
+bool hasTestActive() {
+  for (int i = 1; i < DMX_PACKET_SIZE; i++) if (testActive[i]) return true;
+  return false;
+}
 
 portMUX_TYPE dmxMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -176,16 +183,25 @@ void loadMappings() {
 void pushSse() {
   static uint8_t snapIn[DMX_PACKET_SIZE];
   static uint8_t snapOut[DMX_PACKET_SIZE];
+  static bool    snapTest[DMX_PACKET_SIZE];
   portENTER_CRITICAL(&dmxMux);
-  memcpy(snapIn,  dmxIn,  DMX_PACKET_SIZE);
-  memcpy(snapOut, dmxOut, DMX_PACKET_SIZE);
+  memcpy(snapIn,   dmxIn,      DMX_PACKET_SIZE);
+  memcpy(snapOut,  dmxOut,     DMX_PACKET_SIZE);
+  memcpy(snapTest, testActive, DMX_PACKET_SIZE);
   portEXIT_CRITICAL(&dmxMux);
+
   String s;
-  s.reserve(4300);
+  s.reserve(4400);
   s = "{\"in\":[";
   for (int i = 1; i < DMX_PACKET_SIZE; i++) { s += snapIn[i];  if (i < DMX_PACKET_SIZE-1) s += ','; }
   s += "],\"out\":[";
   for (int i = 1; i < DMX_PACKET_SIZE; i++) { s += snapOut[i]; if (i < DMX_PACKET_SIZE-1) s += ','; }
+  // Compact list of tested channel indices (1-based)
+  s += "],\"test\":[";
+  bool first = true;
+  for (int i = 1; i < DMX_PACKET_SIZE; i++) {
+    if (snapTest[i]) { if (!first) s += ','; s += i; first = false; }
+  }
   s += "]}";
   events.send(s.c_str(), "dmx", millis());
   lastSseAt = millis();
@@ -248,8 +264,9 @@ void setupRoutes() {
   server.addHandler(&events);
 
   server.on("/api/test/reset", HTTP_POST, [](AsyncWebServerRequest* r) {
-    testMode = false;
     portENTER_CRITICAL(&dmxMux);
+    memset(testActive, false, sizeof(testActive));
+    memset(testVals,   0,     sizeof(testVals));
     applyMappings();
     portEXIT_CRITICAL(&dmxMux);
     forceTX = true;
@@ -268,10 +285,11 @@ void setupRoutes() {
       return;
     }
     portENTER_CRITICAL(&dmxMux);
-    dmxOut[ch] = (uint8_t)val;
+    testVals[ch]   = (uint8_t)val;
+    testActive[ch] = true;
+    dmxOut[ch]     = (uint8_t)val;
     portEXIT_CRITICAL(&dmxMux);
-    testMode = true;
-    forceTX  = true;
+    forceTX = true;
     r->send(200, "application/json", "{\"status\":\"ok\"}");
   });
 
@@ -363,7 +381,7 @@ void loop() {
   // RX activity LED
   // Live mode : fast blink ~6 Hz when signal present, off if no signal
   // Test mode : slow double-blink pattern regardless of signal
-  if (testMode) {
+  if (hasTestActive()) {
     // Double-blink: ON 80ms, OFF 80ms, ON 80ms, OFF 560ms (period = 800ms)
     uint32_t phase = now % 800;
     bool on = (phase < 80) || (phase >= 160 && phase < 240);
@@ -385,15 +403,14 @@ void loop() {
     if (packet.err == DMX_OK) {
       portENTER_CRITICAL(&dmxMux);
       dmx_read(rxPort, dmxIn, DMX_PACKET_SIZE);
-      if (!testMode) {
-        applyMappings();
-        lastTxAt = now;
-        portEXIT_CRITICAL(&dmxMux);
-        sendDMX();
-      } else {
-        portEXIT_CRITICAL(&dmxMux);
-      }
+      applyMappings();
+      // Overlay per-channel test values — only tested channels are frozen
+      for (int i = 1; i < DMX_PACKET_SIZE; i++)
+        if (testActive[i]) dmxOut[i] = testVals[i];
+      portEXIT_CRITICAL(&dmxMux);
       lastFrameAt = now;
+      lastTxAt    = now;
+      sendDMX();
     }
   }
 
