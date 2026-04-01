@@ -167,9 +167,7 @@ void loadMappings() {
   String json = prefs.getString("mappings", "");
   prefs.end();
   if (json.isEmpty()) {
-    mappings.push_back({ 1, 8, "Group A", {1, 9, 17, 25} });
-    mappings.push_back({ 50, 8, "Group B", {50, 58, 66} });
-    Serial.println("[NVS] Default values.");
+    Serial.println("[NVS] No config values.");
     return;
   }
   JsonDocument doc;
